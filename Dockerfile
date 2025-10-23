@@ -19,6 +19,9 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY bot.py .
 COPY reset_webhook.py .
 
+# Создаем директорию для логов
+RUN mkdir -p /app/logs
+
 # Создаем непривилегированного пользователя для запуска бота
 RUN useradd -m -u 1000 botuser && \
     chown -R botuser:botuser /app
