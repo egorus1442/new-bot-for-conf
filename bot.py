@@ -13,10 +13,18 @@ from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQu
 # Загрузка переменных окружения
 load_dotenv()
 
+# Создаём директорию для логов, если её нет
+log_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'logs')
+os.makedirs(log_dir, exist_ok=True)
+
 # Настройка логирования
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    level=logging.INFO
+    level=logging.INFO,
+    handlers=[
+        logging.FileHandler(os.path.join(log_dir, 'bot.log'), encoding='utf-8'),
+        logging.StreamHandler()
+    ]
 )
 logger = logging.getLogger(__name__)
 
@@ -26,6 +34,7 @@ API_URL = os.getenv('API_URL', 'http://demo.nikta.ai/llm/api/run')
 API_LOGIN_URL = 'https://demo.nikta.ai/llm/api/login'
 API_EMAIL = 'admin@nikta.ai'
 API_PASSWORD = 'lAz32RA9B'
+REPORT_CHANNEL_ID = -1003126524033
 
 # Состояния диалога
 (CHOOSING_PREDICTION, CHOOSING_SPHERE, WAITING_CUSTOM_SPHERE, WAITING_API_RESPONSE, 
@@ -94,7 +103,8 @@ def get_user_data(user_id: int) -> Dict:
             'name': None,
             'contact': None,
             'last_button_message_id': None,
-            'messages_to_delete': []
+            'messages_to_delete': [],
+            'prediction_history': []  # История всех предсказаний и сфер
         }
     return user_data_storage[user_id]
 
@@ -275,6 +285,12 @@ async def handle_sphere_choice(update: Update, context: ContextTypes.DEFAULT_TYP
     
     user_data['sphere'] = text
     
+    # Сохраняем в историю текущее предсказание и сферу
+    user_data['prediction_history'].append({
+        'prediction': user_data['prediction'],
+        'sphere': user_data['sphere']
+    })
+    
     # Формируем запрос к API
     await send_api_request(update, context, user_data)
     
@@ -288,6 +304,12 @@ async def handle_custom_sphere(update: Update, context: ContextTypes.DEFAULT_TYP
     
     # Сохраняем введенную сферу
     user_data['sphere'] = update.message.text.strip()
+    
+    # Сохраняем в историю текущее предсказание и сферу
+    user_data['prediction_history'].append({
+        'prediction': user_data['prediction'],
+        'sphere': user_data['sphere']
+    })
     
     # Формируем запрос к API
     await send_api_request(update, context, user_data)
@@ -604,8 +626,48 @@ async def handle_email(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
     return ConversationHandler.END
 
 
+async def send_report_to_channel(context: ContextTypes.DEFAULT_TYPE, user_data: Dict, user: Any) -> None:
+    """Отправка отчета в канал."""
+    try:
+        # Формируем отчетное сообщение
+        report_lines = [
+            "📊 <b>Новая заявка от пользователя</b>",
+            "",
+            f"👤 <b>Имя:</b> {user_data['name']}",
+            f"📞 <b>Контакт:</b> {user_data['contact']}",
+            f"🆔 <b>Telegram ID:</b> {user.id}",
+            f"👨‍💼 <b>Username:</b> @{user.username if user.username else 'не указан'}",
+            "",
+            "<b>📈 История предсказаний:</b>"
+        ]
+        
+        # Добавляем все предсказания из истории
+        for i, entry in enumerate(user_data['prediction_history'], 1):
+            report_lines.append(f"\n<b>Попытка {i}:</b>")
+            report_lines.append(f"🔮 Предсказание: {entry['prediction']}")
+            report_lines.append(f"🏢 Сфера: {entry['sphere']}")
+        
+        report_text = "\n".join(report_lines)
+        
+        # Отправляем отчет в канал
+        await context.bot.send_message(
+            chat_id=REPORT_CHANNEL_ID,
+            text=report_text,
+            parse_mode='HTML'
+        )
+        logger.info(f"Report sent to channel for user {user.id}")
+    except Exception as e:
+        logger.error(f"Error sending report to channel: {e}")
+
+
 async def send_final_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Отправка финального сообщения."""
+    user_id = update.effective_user.id
+    user_data = get_user_data(user_id)
+    
+    # Отправляем отчет в канал
+    await send_report_to_channel(context, user_data, update.effective_user)
+    
     # Сообщение 8
     await update.message.reply_text(
         "🎯 Готово!\n"

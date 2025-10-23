@@ -26,17 +26,26 @@ venv/
 ENV/
 env/
 
-# Environment variables
-.env
-
 # IDE
 .vscode/
 .idea/
 *.swp
 *.swo
 *~
-
-# OS
 .DS_Store
-Thumbs.db
 
+# Environment variables
+.env
+
+# Logs
+*.log
+logs/
+bot.log
+
+# Docker
+.dockerignore
+
+# Temporary files
+*.tmp
+*.bak
+*.swp
