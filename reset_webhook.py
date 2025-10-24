@@ -27,3 +27,5 @@ else:
     print(f"❌ Ошибка: {response.status_code}")
     print(response.text)
 
+
+

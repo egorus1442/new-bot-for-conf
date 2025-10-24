@@ -21,3 +21,5 @@ echo ""
 
 python bot.py
 
+
+
