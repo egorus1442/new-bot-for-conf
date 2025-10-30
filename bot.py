@@ -626,14 +626,19 @@ async def handle_contact_type(update: Update, context: ContextTypes.DEFAULT_TYPE
         logger.error(f"Error deleting messages: {e}")
     
     if text == "📱 Отправить номер":
-        # Запрашиваем номер телефона
-        keyboard = [[KeyboardButton("📱 Отправить мой номер", request_contact=True)]]
+        # Запрашиваем номер телефона - предлагаем два варианта
+        keyboard = [
+            [KeyboardButton("📱 Поделиться номером Telegram", request_contact=True)],
+            ["✍️ Ввести номер вручную"]
+        ]
         reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=True)
         
-        await update.message.reply_text(
-            "Нажмите на кнопку ниже, чтобы отправить свой номер телефона 👇",
+        message = await update.message.reply_text(
+            "Выберите способ отправки номера телефона 👇",
             reply_markup=reply_markup
         )
+        
+        user_data['last_button_message_id'] = message.message_id
         
         return WAITING_PHONE
     else:
@@ -646,11 +651,51 @@ async def handle_contact_type(update: Update, context: ContextTypes.DEFAULT_TYPE
         return WAITING_EMAIL
 
 
+def is_valid_phone(phone: str) -> bool:
+    """
+    Проверяет, является ли номер телефона корректным.
+    
+    Разрешены:
+    - Цифры
+    - Пробелы, дефисы, скобки для форматирования
+    - Знак + в начале для международного формата
+    
+    Минимум 10 цифр, максимум 15 цифр.
+    """
+    if not phone or not phone.strip():
+        return False
+    
+    phone_stripped = phone.strip()
+    
+    # Удаляем все символы кроме цифр для подсчета
+    digits_only = re.sub(r'\D', '', phone_stripped)
+    
+    # Проверяем количество цифр (от 10 до 15)
+    if len(digits_only) < 10 or len(digits_only) > 15:
+        return False
+    
+    # Проверяем допустимые символы: цифры, +, пробелы, дефисы, скобки
+    allowed_pattern = r'^[\d\s\-\+\(\)]+$'
+    if not re.match(allowed_pattern, phone_stripped):
+        return False
+    
+    # Если есть +, он должен быть только в начале
+    if '+' in phone_stripped and not phone_stripped.startswith('+'):
+        return False
+    
+    # Проверяем что + встречается не более одного раза
+    if phone_stripped.count('+') > 1:
+        return False
+    
+    return True
+
+
 async def handle_phone(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Обработчик получения номера телефона."""
     user_id = update.effective_user.id
     user_data = get_user_data(user_id)
     
+    # Случай 1: Пользователь отправил контакт из Telegram
     if update.message.contact:
         phone = update.message.contact.phone_number
         user_data['contact'] = f"Телефон: {phone}"
@@ -658,11 +703,52 @@ async def handle_phone(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
         await send_final_message(update, context)
         
         return ConversationHandler.END
-    else:
+    
+    # Случай 2: Пользователь выбрал "Ввести номер вручную"
+    if update.message.text == "✍️ Ввести номер вручную":
+        # Удаляем сообщение с кнопкой и сообщение пользователя
+        try:
+            await context.bot.delete_message(chat_id=update.effective_chat.id, message_id=update.message.message_id)
+            if user_data['last_button_message_id']:
+                await context.bot.delete_message(chat_id=update.effective_chat.id, message_id=user_data['last_button_message_id'])
+            for msg_id in user_data['messages_to_delete']:
+                try:
+                    await context.bot.delete_message(chat_id=update.effective_chat.id, message_id=msg_id)
+                except:
+                    pass
+            user_data['messages_to_delete'] = []
+            user_data['last_button_message_id'] = None
+        except Exception as e:
+            logger.error(f"Error deleting messages: {e}")
+        
         await update.message.reply_text(
-            "Пожалуйста, используйте кнопку для отправки номера телефона 👇"
+            "Напишите свой номер телефона в любом удобном формате\n"
+            "(например: +7 123 456 78 90 или 8 (123) 456-78-90)",
+            reply_markup=ReplyKeyboardRemove()
         )
         return WAITING_PHONE
+    
+    # Случай 3: Пользователь ввел номер текстом
+    phone = update.message.text.strip()
+    
+    # Валидация номера телефона
+    if not is_valid_phone(phone):
+        await update.message.reply_text(
+            "Пожалуйста, введите корректный номер телефона.\n"
+            "Номер должен содержать от 10 до 15 цифр.\n"
+            "Допустимые символы: цифры, пробелы, дефисы, скобки и + в начале.\n\n"
+            "Примеры:\n"
+            "+7 123 456 78 90\n"
+            "8 (123) 456-78-90\n"
+            "+1-234-567-8900"
+        )
+        return WAITING_PHONE
+    
+    user_data['contact'] = f"Телефон: {phone}"
+    
+    await send_final_message(update, context)
+    
+    return ConversationHandler.END
 
 
 async def handle_email(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
