@@ -104,7 +104,8 @@ def get_user_data(user_id: int) -> Dict:
             'contact': None,
             'last_button_message_id': None,
             'messages_to_delete': [],
-            'prediction_history': []  # История всех предсказаний и сфер
+            'prediction_history': [],  # История всех предсказаний и сфер
+            'scenario_completed': False  # Флаг завершенного сценария
         }
     return user_data_storage[user_id]
 
@@ -113,6 +114,55 @@ def reset_user_data(user_id: int) -> None:
     """Сбросить данные пользователя при новом /start."""
     if user_id in user_data_storage:
         del user_data_storage[user_id]
+
+
+def is_valid_name(name: str) -> bool:
+    """
+    Проверяет, является ли имя корректным.
+    
+    Разрешены:
+    - Буквы любых языков (русский, английский и т.д.)
+    - Пробелы (для имени и фамилии)
+    - Дефисы и апострофы
+    - Точки (для инициалов)
+    
+    Запрещены:
+    - Цифры
+    - Смайлики
+    - Специальные символы
+    """
+    # Проверяем что имя не пустое
+    if not name or not name.strip():
+        return False
+    
+    # Проверяем длину имени (минимум 2 символа, максимум 100)
+    name_stripped = name.strip()
+    if len(name_stripped) < 2 or len(name_stripped) > 100:
+        return False
+    
+    # Проверяем каждый символ
+    for char in name_stripped:
+        # Разрешены только буквы, пробелы, дефисы, апострофы и точки
+        if not (char.isalpha() or char.isspace() or char in ['-', "'", '.']):
+            return False
+    
+    # Проверяем что имя содержит хотя бы одну букву
+    if not any(char.isalpha() for char in name_stripped):
+        return False
+    
+    # Проверяем что имя не начинается и не заканчивается дефисом
+    if name_stripped.startswith('-') or name_stripped.endswith('-'):
+        return False
+    
+    # Проверяем что нет множественных дефисов подряд
+    if '--' in name_stripped:
+        return False
+    
+    # Проверяем что нет множественных пробелов подряд
+    if '  ' in name_stripped:
+        return False
+    
+    return True
 
 
 def parse_api_response(api_data: Dict[str, Any]) -> list[str]:
@@ -169,6 +219,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     # Сброс данных пользователя при новом старте
     reset_user_data(user_id)
     user_data = get_user_data(user_id)
+    user_data['scenario_completed'] = False
     
     # Сообщение 1
     await update.message.reply_text(
@@ -512,7 +563,18 @@ async def handle_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
     user_id = update.effective_user.id
     user_data = get_user_data(user_id)
     
-    user_data['name'] = update.message.text
+    name = update.message.text.strip()
+    
+    # Валидация имени
+    if not is_valid_name(name):
+        await update.message.reply_text(
+            "Пожалуйста, введите корректное имя.\n"
+            "Имя может содержать только буквы, пробелы, дефисы, апострофы и точки.\n"
+            "Цифры, смайлики и другие специальные символы не допускаются."
+        )
+        return WAITING_NAME
+    
+    user_data['name'] = name
     
     # Сообщение 7
     keyboard = [
@@ -678,6 +740,21 @@ async def send_final_message(update: Update, context: ContextTypes.DEFAULT_TYPE)
         reply_markup=ReplyKeyboardRemove(),
         disable_web_page_preview=True
     )
+    
+    # Устанавливаем флаг завершенного сценария
+    user_data['scenario_completed'] = True
+
+
+async def handle_completed_scenario_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Обработчик сообщений после завершения сценария."""
+    user_id = update.effective_user.id
+    user_data = get_user_data(user_id)
+    
+    # Проверяем, завершен ли сценарий
+    if user_data.get('scenario_completed', False):
+        await update.message.reply_text(
+            "Чтобы начать диалог заново, нажмите /start"
+        )
 
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -736,6 +813,11 @@ def main() -> None:
     )
     
     application.add_handler(conv_handler)
+    
+    # Добавляем глобальный обработчик для сообщений после завершения сценария
+    application.add_handler(
+        MessageHandler(filters.TEXT & ~filters.COMMAND, handle_completed_scenario_message)
+    )
     
     # Запускаем бота
     logger.info("Bot started")
